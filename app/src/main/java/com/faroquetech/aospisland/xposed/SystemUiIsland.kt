@@ -343,17 +343,21 @@ object SystemUiIsland {
         for ((v, vis) in m) try { v.visibility = vis } catch (_: Throwable) { }
     }
 
+    private var sweepIdle = 0
+
     private fun mediaSweepTick() {
         var next = 2000L
         try {
             val app = appRef
             if (app != null && runtime != null) {
                 val hide = runtime?.config?.nowBarHideNativeMedia == true
-                val locked = keyguardLocked()
+                val locked = keyguardLockedFast()
                 val on = (app.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager).isInteractive
                 if (hide && locked && on) {
-                    next = 400L
+                    val before = synchronized(sweptViews) { sweptViews.size }
                     for (r in allRootViews()) sweep(r, 0, true)
+                    sweepIdle = if (sweptViews.size > before) 0 else (sweepIdle + 1).coerceAtMost(2)
+                    next = 400L shl sweepIdle
                     val now = android.os.SystemClock.uptimeMillis()
                     if (mediaSeen.isNotEmpty() && now - lastMediaReport > 6000L) {
                         lastMediaReport = now
@@ -923,7 +927,7 @@ object SystemUiIsland {
     private var lockDumped = false
     /** Once per lock: report which notification-looking views are on screen, so an unhandled element can be identified from the app's status box. */
     private fun dumpLockViews() {
-        if (!keyguardLocked()) { lockDumped = false; return }
+        if (!keyguardLockedFast()) { lockDumped = false; return }
         if (lockDumped) return
         lockDumped = true
         main.postDelayed({
@@ -944,7 +948,7 @@ object SystemUiIsland {
     }
 
     private fun syncLockIcons() {
-        val locked = runtime?.config?.nowBarHideNative == true && keyguardLocked()
+        val locked = runtime?.config?.nowBarHideNative == true && keyguardLockedFast()
         if (!locked) {
             val hidden = synchronized(lockHiddenViews) { lockHiddenViews.entries.map { it.key to it.value }.also { lockHiddenViews.clear() } }
             for ((v, w) in hidden) try { if (v.visibility != View.VISIBLE && w == View.VISIBLE) setVis(v, View.VISIBLE) } catch (_: Throwable) { }
@@ -1065,13 +1069,17 @@ object SystemUiIsland {
         }
     }
 
+    private val pendingChipPasses = ArrayList<Runnable>()
+
     private fun syncChips() {
         syncProgressIcons()
         val hide = shouldHideChips()
         scanBar(hide)
         bumpCompose()
-        for (d in longArrayOf(300, 1000, 2500)) main.postDelayed({ bumpCompose() }, d)
-        if (hide) for (d in longArrayOf(300, 700, 1500, 3000)) main.postDelayed({ if (shouldHideChips()) scanBar(true) }, d)
+        for (r in pendingChipPasses) main.removeCallbacks(r)
+        pendingChipPasses.clear()
+        for (d in longArrayOf(300, 1000, 2500)) { val r = Runnable { bumpCompose() }; pendingChipPasses.add(r); main.postDelayed(r, d) }
+        if (hide) for (d in longArrayOf(300, 700, 1500, 3000)) { val r = Runnable { if (shouldHideChips()) scanBar(true) }; pendingChipPasses.add(r); main.postDelayed(r, d) }
         barRoot?.get()?.invalidate()
         val views = synchronized(chipViews) { chipViews.toList() }
         for (v in views) try {

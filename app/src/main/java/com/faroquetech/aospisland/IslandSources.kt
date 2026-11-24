@@ -180,7 +180,7 @@ class SystemEventsSource(private val ctx: Context, private val controller: Islan
                 hotspotClients = clients
                 publishHotspot(enabled, clients)
             }
-            handler.postDelayed(this, 2000L)
+            handler.postDelayed(this, if (enabled) 2000L else 5000L)
         }
     }
     private val receiver = object : BroadcastReceiver() {
