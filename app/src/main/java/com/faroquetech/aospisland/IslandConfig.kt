@@ -16,6 +16,8 @@ data class IslandConfig(
     val glassTintPct: Int = 55,
     val haptics: Boolean = true,
     val yOffsetDp: Int = 0,
+    /** Island horizontal offset from the cutout, in dp (negative = left). The expanded card stays centered on the cutout. */
+    val xOffsetDp: Int = 0,
     val widthTrimDp: Int = 0,
     val heightTrimDp: Int = 0,
     /** Width of the expanded card. */
@@ -94,7 +96,7 @@ data class IslandConfig(
                 animSpeed = f("animSpeed", d.animSpeed).coerceIn(0.5f, 2f),
                 blur = b("blur", d.blur), haptics = b("haptics", d.haptics),
                 islandStyle = i("islandStyle", d.islandStyle).coerceIn(0, 4), glassTintPct = i("glassTintPct", d.glassTintPct).coerceIn(10, 100),
-                yOffsetDp = i("yOffsetDp", d.yOffsetDp), widthTrimDp = i("widthTrimDp", d.widthTrimDp),
+                yOffsetDp = i("yOffsetDp", d.yOffsetDp), xOffsetDp = i("xOffsetDp", d.xOffsetDp).coerceIn(-150, 150), widthTrimDp = i("widthTrimDp", d.widthTrimDp),
                 heightTrimDp = i("heightTrimDp", d.heightTrimDp), cardWidthDp = i("cardWidthDp", d.cardWidthDp), tapExpands = b("tapExpands", d.tapExpands),
                 manualCutout = b("manualCutout", d.manualCutout),
                 cutoutWdp = i("cutoutWdp", d.cutoutWdp), cutoutHdp = i("cutoutHdp", d.cutoutHdp), cutoutTopDp = i("cutoutTopDp", d.cutoutTopDp),

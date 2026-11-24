@@ -440,7 +440,20 @@ class IslandView(context: Context) : ViewGroup(context) {
     // follows the pill's bounds and forwards touches here, so jitter in that window can never be seen.
     private var anchorX = -1
     private var winLeftPx = 0
-    private fun pillCx(): Float = if (anchorX >= 0) (anchorX - winLeftPx).toFloat() else width / 2f
+    private fun pillOffsetPx(): Int = dp(config.xOffsetDp.coerceIn(-150, 150))
+    /** Offset capped so the pill's centre can never be pushed off screen. */
+    private fun cappedPillOffsetPx(): Int {
+        val off = pillOffsetPx()
+        if (anchorX >= 0 && screenW > 0) {
+            val cap = (screenW / 2 - holeW / 2 - dp(12)).coerceAtLeast(0)
+            return off.coerceIn(-cap, cap)
+        }
+        return off
+    }
+    private fun pillCx(): Float = if (anchorX >= 0) (anchorX - winLeftPx + cappedPillOffsetPx()).toFloat() else width / 2f + pillOffsetPx()
+    /** Window-relative centre of the expanded card: always the cutout's own centre, so the card never shifts with the pill. */
+    private fun cardCx(): Int = if (anchorX >= 0) anchorX - winLeftPx else width / 2
+    private fun pillScreenCx(): Int = if (anchorX >= 0) anchorX + cappedPillOffsetPx() else width / 2
 
     /** Called whenever the bounds that should receive touches change. Rect is in screen x, window-relative y; null = none. */
     var onTouchBounds: ((android.graphics.Rect?) -> Unit)? = null
@@ -449,23 +462,24 @@ class IslandView(context: Context) : ViewGroup(context) {
         val p = primary
         if (p == null && extras.isNotEmpty() && !userHidden && !suppressed && !lockHidden && !fullscreenHidden && config.enabled && anchorX >= 0) {
             // only the bubbles take touches; the folded pill over the camera does not
-            val right = anchorX - holeW / 2
-            val left = (bubbleCx(pillCx(), extras.size - 1) - pillH / 2f - dp(6)).toInt() + (anchorX - pillCx().toInt())
+            val right = pillScreenCx() - holeW / 2
+            val left = (bubbleCx(pillCx(), extras.size - 1) - pillH / 2f - dp(6)).toInt() + (pillScreenCx() - pillCx().toInt())
             return android.graphics.Rect(left, 0, right, pillH + dp(6))
         }
         if (p == null || suppressed || lockHidden || fullscreenHidden || !config.enabled || anchorX < 0) return null
         if (userHidden) {
             // small invisible swipe zone on the cutout so the pill can be brought back
             val half = hiddenHalfW()
-            return android.graphics.Rect(anchorX - half, 0, anchorX + half, pillH + dp(12))
+            return android.graphics.Rect(pillScreenCx() - half, 0, pillScreenCx() + half, pillH + dp(12))
         }
         val slop = dp(6)
         val expanded = mode == Mode.EXPANDED
         val w = if (expanded) expandedW() else compactW
         val h = if (expanded) max(cardH, dp(90)) else pillH
-        var left = anchorX - w / 2 - slop
-        val right = anchorX + w / 2 + slop
-        if (!expanded && extras.isNotEmpty()) left = min(left, (bubbleCx(pillCx(), extras.size - 1) - pillH / 2f - dp(6)).toInt() + (anchorX - pillCx().toInt()))
+        val ccx = if (expanded) anchorX else pillScreenCx()
+        var left = ccx - w / 2 - slop
+        val right = ccx + w / 2 + slop
+        if (!expanded && extras.isNotEmpty()) left = min(left, (bubbleCx(pillCx(), extras.size - 1) - pillH / 2f - dp(6)).toInt() + (pillScreenCx() - pillCx().toInt()))
         val top = if (expanded) expTop().toInt() else 0
         return android.graphics.Rect(left, top, right, top + h + slop)
     }
@@ -646,7 +660,7 @@ class IslandView(context: Context) : ViewGroup(context) {
             val by = (pillH - bubble.measuredHeight) / 2
             bubble.layout(bx + (pillH - bubble.measuredWidth) / 2, by, bx + (pillH + bubble.measuredWidth) / 2, by + bubble.measuredHeight)
         }
-        card?.let { c -> val ex = expandedW(); c.layout(cx - ex / 2, 0, cx + ex / 2, c.measuredHeight) }
+        card?.let { c -> val ex = expandedW(); c.layout(cardCx() - ex / 2, 0, cardCx() + ex / 2, c.measuredHeight) }
     }
 
 
@@ -726,7 +740,8 @@ class IslandView(context: Context) : ViewGroup(context) {
     }
 
     override fun dispatchDraw(canvas: Canvas) {
-        val cx = pillCx()
+        // the compact pill sits at the offset position; while the card opens it glides back to the cutout's centre
+        val cx = pillCx() + (cardCx() - pillCx()) * sP.value.coerceIn(0f, 1f)
         val w = max(0f, sW.value); val h = max(0f, sH.value); val rad = min(sR.value, min(w, h) / 2f)
         shapeRect.set(cx - w / 2f, sTop.value, cx + w / 2f, sTop.value + h)
         shapePath.reset(); shapePath.addRoundRect(shapeRect, rad, rad, Path.Direction.CW)

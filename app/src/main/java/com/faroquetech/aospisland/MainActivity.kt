@@ -141,6 +141,7 @@ class MainActivity : Activity() {
 
         root.addView(section("POSITION"))
         root.addView(sliderRow("Vertical offset", "yOffsetDp", -20, 40, 0, "dp"))
+        root.addView(sliderRow("Horizontal offset", "xOffsetDp", -150, 150, 0, "dp"))
         root.addView(sliderRow("Extra width", "widthTrimDp", -150, 60, 0, "dp"))
         root.addView(sliderRow("Extra height", "heightTrimDp", -60, 30, 0, "dp"))
         root.addView(sliderRow("Expanded card width", "cardWidthDp", 160, 500, 330, "dp"))
