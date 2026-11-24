@@ -6,7 +6,6 @@ import android.content.Intent
 import android.net.Uri
 import android.content.IntentFilter
 import android.app.KeyguardManager
-import android.service.notification.StatusBarNotification
 import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.graphics.Point
@@ -60,7 +59,6 @@ data class Geometry(val centerX: Int, val top: Int, val holeW: Int, val pillH: I
  *    everywhere else go straight to the app underneath.
  */
 class IslandWindow(private val ctx: Context, private val windowType: Int, private val systemHost: Boolean) {
-    companion object { const val ACTION_NOWBAR_POSITION = "com.faroquetech.aospisland.action.NOWBAR_POSITION"; const val EXTRA_NOWBAR_POSITION = "position_pct" }
     val view = IslandView(ctx)
     private val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private var lp: WindowManager.LayoutParams? = null
@@ -71,18 +69,7 @@ class IslandWindow(private val ctx: Context, private val windowType: Int, privat
     private var proxy: InputProxy? = null
     private var proxyLp: WindowManager.LayoutParams? = null
     private var pendingBounds: Rect? = null
-    private val nowBar = NowBarView(ctx)
-    private var nowBarLp: WindowManager.LayoutParams? = null
     @Volatile private var locked = false
-    @Volatile private var nowBarPositionPct = 94
-    private var positionReceiverRegistered = false
-    private val positionReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action != ACTION_NOWBAR_POSITION) return
-            nowBarPositionPct = intent.getIntExtra(EXTRA_NOWBAR_POSITION, nowBarPositionPct).coerceIn(0, 100)
-            repositionNowBar()
-        }
-    }
     private var lockReceiverRegistered = false
     private val keyguard by lazy { ctx.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager }
     private val lockReceiver = object : BroadcastReceiver() {
@@ -118,7 +105,6 @@ class IslandWindow(private val ctx: Context, private val windowType: Int, privat
         config = cfg
         val d = ctx.resources.displayMetrics.density
         val g = Geometry.compute(ctx, cfg); geo = g
-        nowBarPositionPct = cfg.nowBarPositionPct   // from the config (in SystemUI, ctx's own prefs are NOT the app's)
         val params = WindowManager.LayoutParams(
             g.screenW, g.pillH + (18 * d).toInt(), windowType,
             baseFlags() or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
@@ -130,38 +116,14 @@ class IslandWindow(private val ctx: Context, private val windowType: Int, privat
             cutoutMode(this)
         }
         lp = params
+        view.config = cfg
         view.onSizeNeeded = { _, h -> resize(h) }
         view.onTouchBounds = { r -> updateProxy(r) }
         view.onInputMode = { on -> setInputMode(on) }
-        view.config = cfg
         view.setGeometry(g.holeW, g.pillH, g.screenW, g.centerX, 0, g.top)
         view.suppressed = cfg.hideInLandscape && g.landscape
         wm.addView(view, params)
         attached = true
-
-        // The lock-screen Now Bar is a completely separate view/window; IslandView remains unchanged.
-        val nowBarHeight = nowBar.contentHeightPx
-        val nowBarWidth = NowBarView.widthFor(d, g.screenW)
-        nowBar.onDismiss = { key -> IslandHub.cancel(key) }
-        nowBar.onContentChanged = { applyNowBarVisibility(); repositionNowBar(); nbLog("bar: ${nowBar.stats} visible=${nowBar.visibility == View.VISIBLE} locked=$locked") }
-        val nbType = config.nowBarWindowType
-        val nbp = WindowManager.LayoutParams(
-            nowBarWidth, nowBarHeight, nbType,
-            baseFlags(), PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.LEFT
-            title = "AOSPIslandNowBar"
-            x = (g.screenW - nowBarWidth) / 2; y = nowBarY(g.screenH, nowBarHeight)
-            cutoutMode(this)
-        }
-        nowBarLp = nbp
-        nowBar.visibility = View.GONE
-        try { wm.addView(nowBar, nbp); nbLog("window added type=$nbType y=${nbp.y} h=${nbp.height}", true) }
-        catch (t: Throwable) {
-            nbLog("addView FAILED (type=$nbType): $t - falling back to type=$windowType", true)
-            try { nbp.type = windowType; wm.addView(nowBar, nbp); nbLog("window added type=$windowType (fallback)", true) }
-            catch (t2: Throwable) { nowBarLp = null; nbLog("addView FAILED (type=$windowType): $t2", true) }
-        }
         try {
             val filter = IntentFilter().apply {
                 addAction(Intent.ACTION_SCREEN_OFF); addAction(Intent.ACTION_SCREEN_ON); addAction(Intent.ACTION_USER_PRESENT)
@@ -171,12 +133,6 @@ class IslandWindow(private val ctx: Context, private val windowType: Int, privat
             lockReceiverRegistered = true
         } catch (_: Throwable) { }
         refreshLockState()
-        try {
-            val pf = IntentFilter(ACTION_NOWBAR_POSITION)
-            if (Build.VERSION.SDK_INT >= 33) ctx.registerReceiver(positionReceiver, pf, Context.RECEIVER_EXPORTED)
-            else ctx.registerReceiver(positionReceiver, pf)
-            positionReceiverRegistered = true
-        } catch (_: Throwable) { }
 
         val pv = InputProxy(ctx)
         val pp = WindowManager.LayoutParams(
@@ -194,61 +150,6 @@ class IslandWindow(private val ctx: Context, private val windowType: Int, privat
         if (locked) updateProxy(null) else updateProxy(view.touchBounds())
     }
 
-    private fun nowBarY(screenH: Int, barH: Int): Int {
-        val pct = nowBarPositionPct.coerceIn(0, 100)
-        return ((screenH - barH).coerceAtLeast(0) * pct / 100f).toInt()
-    }
-
-    private var lastNbLog = 0L
-    /** Writes a line into the app's "SystemUI hook" status box (works from SystemUI and from the overlay service). */
-    private fun nbLog(msg: String, force: Boolean = false) {
-        val now = android.os.SystemClock.uptimeMillis()
-        if (!force && now - lastNbLog < 400) return
-        lastNbLog = now
-        try { ctx.contentResolver.call(Uri.parse("content://${IslandConfig.AUTHORITY}"), "hello", "nowbar: $msg", null) } catch (_: Throwable) { }
-    }
-
-    /** The app's saved position, read straight from the app (SystemUI cannot read the app's prefs itself). */
-    @Suppress("DEPRECATION")
-    private fun savedNowBarPct(): Int? = try {
-        ctx.contentResolver.call(Uri.parse("content://${IslandConfig.AUTHORITY}"), "get", null, null)
-            ?.let { IslandConfig.fromBundle(it).nowBarPositionPct }
-    } catch (_: Throwable) { null }
-
-    private fun repositionNowBar(refresh: Boolean = false) {
-        val g = geo ?: return
-        val p = nowBarLp ?: run { nbLog("no window (addView failed earlier)"); return }
-        if (refresh) savedNowBarPct()?.let { nowBarPositionPct = it }
-        val dens = ctx.resources.displayMetrics.density
-        val collapsedH = nowBar.contentHeightPx
-        val h = nowBar.desiredHeightPx(g.screenW); val w = nowBar.desiredWidthPx(g.screenW)
-        val baseY = nowBarY(g.screenH, collapsedH)
-        p.height = h; p.width = w; p.x = (g.screenW - w) / 2
-        // an expanded card grows upward from the pill's spot
-        p.y = if (h > collapsedH) (baseY + collapsedH - h).coerceAtLeast((32 * dens).toInt()) else baseY
-        try { if (attached) wm.updateViewLayout(nowBar, p) }
-        catch (t: Throwable) { nbLog("updateViewLayout FAILED: $t", true); return }
-        nbLog("pct=$nowBarPositionPct y=${p.y} h=${p.height} screenH=${g.screenH} locked=$locked", force = refresh)
-    }
-
-    /** Set by the runtime: every notification currently known, not only the ones posted since the module loaded. */
-    var rawNotifications: (() -> List<StatusBarNotification>)? = null
-
-    /** Called after every notification feed update so media can be re-linked to its notification. */
-    var onFeed: (() -> Unit)? = null
-
-    fun updateNotifications(list: List<StatusBarNotification>) {
-        val src = try { rawNotifications?.invoke() } catch (_: Throwable) { null }
-        nowBar.setNotifications(if (!src.isNullOrEmpty()) src else list)
-        nbLog("feed: hook=${list.size} source=${src?.size ?: -1}")
-        try { onFeed?.invoke() } catch (_: Throwable) { }
-    }
-    fun updateMedia(a: IslandActivity?) { nowBar.setMedia(a) }
-    fun updateLive(list: List<IslandActivity>) { nowBar.setLive(list) }
-
-    /** The pill is only there on the lock screen, and only when there is media or a notification to show. */
-    private fun applyNowBarVisibility() { nowBar.visibility = if (locked && attached && nowBar.hasContent) View.VISIBLE else View.GONE }
-
     private fun refreshLockState() {
         val isLocked = try { keyguard.isKeyguardLocked } catch (_: Throwable) { false }
         if (locked == isLocked) return
@@ -256,22 +157,18 @@ class IslandWindow(private val ctx: Context, private val windowType: Int, privat
         view.lockHidden = locked
         view.visibility = if (locked) View.INVISIBLE else View.VISIBLE
         if (locked) updateProxy(null) else updateProxy(view.touchBounds())
-        applyNowBarVisibility()
-        repositionNowBar(refresh = true)
     }
 
     fun update(cfg: IslandConfig) {
         config = cfg
         if (!attached) return
         val g = Geometry.compute(ctx, cfg); geo = g
-        nowBarPositionPct = cfg.nowBarPositionPct
         view.config = cfg
         view.setGeometry(g.holeW, g.pillH, g.screenW, g.centerX, 0, g.top)
         view.suppressed = cfg.hideInLandscape && g.landscape
         lp?.let { it.x = 0; it.y = g.top; it.width = g.screenW; safeUpdate(it) }
         if (locked) updateProxy(null) else updateProxy(view.touchBounds())
         refreshLockState()
-        repositionNowBar()   // rotation / display-size change
     }
 
     /** Call on rotation / display changes. */
@@ -323,9 +220,6 @@ class IslandWindow(private val ctx: Context, private val windowType: Int, privat
         proxy?.let { try { wm.removeViewImmediate(it) } catch (ignored: Throwable) { } }
         proxy = null; proxyLp = null
         try { wm.removeViewImmediate(view) } catch (ignored: Throwable) { }
-        try { wm.removeViewImmediate(nowBar) } catch (_: Throwable) { }
-        nowBarLp = null
         if (lockReceiverRegistered) { try { ctx.unregisterReceiver(lockReceiver) } catch (_: Throwable) { }; lockReceiverRegistered = false }
-        if (positionReceiverRegistered) { try { ctx.unregisterReceiver(positionReceiver) } catch (_: Throwable) { }; positionReceiverRegistered = false }
     }
 }

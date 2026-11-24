@@ -16,17 +16,17 @@ class IslandNotificationListener : NotificationListenerService() {
         super.onListenerConnected()
         IslandHub.canceller = { k -> try { cancelNotification(k) } catch (ignored: Throwable) { } }
         try { IslandHub.snapshot = activeNotifications } catch (ignored: Throwable) { }
-        IslandHub.runtime?.let { it.notifications.reset(IslandHub.snapshot); it.window.updateNotifications(IslandHub.snapshot?.toList().orEmpty()); it.restartMedia() }
+        IslandHub.runtime?.let { it.notifications.reset(IslandHub.snapshot); it.restartMedia() }
     }
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         sbn ?: return
         try { IslandHub.snapshot = activeNotifications } catch (ignored: Throwable) { }
-        IslandHub.runtime?.let { it.notifications.post(sbn); it.window.updateNotifications(IslandHub.snapshot?.toList().orEmpty()) }
+        IslandHub.runtime?.let { it.notifications.post(sbn) }
     }
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
         sbn ?: return
         try { IslandHub.snapshot = activeNotifications } catch (ignored: Throwable) { }
-        IslandHub.runtime?.let { it.notifications.remove(sbn.key); it.window.updateNotifications(IslandHub.snapshot?.toList().orEmpty()) }
+        IslandHub.runtime?.let { it.notifications.remove(sbn.key) }
     }
 
     companion object {

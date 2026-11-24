@@ -16,7 +16,6 @@ import com.faroquetech.aospisland.IslandHub
 import com.faroquetech.aospisland.IslandRuntime
 import com.faroquetech.aospisland.IslandWindow
 import com.faroquetech.aospisland.LsposedNotif
-import com.faroquetech.aospisland.NowBarView
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
@@ -118,7 +117,7 @@ object SystemUiIsland {
                 report(a, "island window attached (layer ${cfg.windowType})")
                 nr.window.view.setOnTouchListener { _, ev -> if (ev.actionMasked == MotionEvent.ACTION_DOWN) report(a, "touch reached the island"); false }
                 nr.window.view.onExpandedChanged = { open -> report(a, if (open) "island expanded" else "island collapsed") }
-                try { nr.notifications.reset(listenerRef?.activeNotifications ?: posted.values.toTypedArray()) } catch (ignored: Throwable) { nr.notifications.reset(posted.values.toTypedArray()) }; nr.window.updateNotifications(posted.values.toList())
+                try { nr.notifications.reset(listenerRef?.activeNotifications ?: posted.values.toTypedArray()) } catch (ignored: Throwable) { nr.notifications.reset(posted.values.toTypedArray()) }
                 lastDemo = b?.getString("demoCmd")
             } catch (t: Throwable) {
                 runtime = null
@@ -148,15 +147,15 @@ object SystemUiIsland {
             override fun afterHookedMethod(p: MethodHookParam) {
                 val sbn = p.args.firstOrNull() as? StatusBarNotification ?: return
                 listenerRef = p.thisObject as? NotificationListenerService ?: listenerRef
-                posted[sbn.key] = sbn; runtime?.notifications?.post(sbn); runtime?.window?.updateNotifications(posted.values.toList())
-                main.post { syncProgressIcons(); syncSocialIcons(); syncLockIcons() }
+                posted[sbn.key] = sbn; runtime?.notifications?.post(sbn)
+                main.post { syncProgressIcons(); syncSocialIcons() }
             }
         })
         XposedBridge.hookAllMethods(cls, "onNotificationRemoved", object : XC_MethodHook() {
             override fun afterHookedMethod(p: MethodHookParam) {
                 val sbn = p.args.firstOrNull() as? StatusBarNotification ?: return
-                posted.remove(sbn.key); runtime?.notifications?.remove(sbn.key); runtime?.window?.updateNotifications(posted.values.toList())
-                main.post { syncProgressIcons(); syncSocialIcons(); syncLockIcons() }
+                posted.remove(sbn.key); runtime?.notifications?.remove(sbn.key)
+                main.post { syncProgressIcons(); syncSocialIcons() }
             }
         })
         XposedBridge.hookAllMethods(cls, "onListenerConnected", object : XC_MethodHook() {
@@ -168,233 +167,6 @@ object SystemUiIsland {
      * Hook the interruption decision first: returning false here prevents the heads-up entry
      * from being presented, without cancelling it or removing its actions from the shade.
      */
-    /**
-     * Removes notifications from the real lock screen so they only appear in the Now Bar.
-     * Hooks SystemUI's keyguard visibility decision (the filter that decides which entries the lock-screen list shows);
-     * only while the keyguard is locked, so the shade after unlock is untouched. Media, calls and SystemUI's own
-     * notifications are left alone.
-     */
-    fun hookLockscreenNotifications(cl: ClassLoader) {
-        var hooked = 0
-        val candidates = listOf(
-            "com.android.systemui.statusbar.notification.interruption.KeyguardNotificationVisibilityProviderImpl",
-            "com.android.systemui.statusbar.notification.collection.provider.KeyguardNotificationVisibilityProviderImpl",
-            "com.android.systemui.statusbar.notification.KeyguardNotificationVisibilityProviderImpl",
-            "com.android.systemui.statusbar.NotificationLockscreenUserManagerImpl",
-            "com.android.systemui.statusbar.notification.collection.coordinator.KeyguardCoordinator"
-        )
-        for (name in candidates) {
-            val c = XposedHelpers.findClassIfExists(name, cl) ?: continue
-            for (m in c.declaredMethods) {
-                val hide = m.name == "shouldHideNotification"          // true = hide
-                val show = m.name == "shouldShowOnKeyguard"            // false = hide
-                if (!hide && !show) continue
-                if (m.returnType != java.lang.Boolean.TYPE && m.returnType != java.lang.Boolean::class.java) continue
-                try {
-                    XposedBridge.hookAllMethods(c, m.name, object : XC_MethodHook() {
-                        override fun afterHookedMethod(p: MethodHookParam) {
-                            try {
-                                if (runtime?.config?.nowBarHideNative != true || !keyguardLocked()) return
-                                val sbn = p.args.asSequence().mapNotNull { findSbn(it, 0) }.firstOrNull() ?: return
-                                val pkg = sbn.packageName
-                                val sysUi = pkg == "com.android.systemui" || pkg.startsWith("com.android.systemui.")
-                                val rec = sysUi && runtime?.config?.showRecord == true && (sbn.notification?.channelId.orEmpty().contains("record", ignoreCase = true))
-                                if ((sysUi && !rec) ||
-                                    pkg.contains("incall", ignoreCase = true) || pkg.contains("dialer", ignoreCase = true) ||
-                                    NowBarView.isMediaNotification(sbn)) return
-                                p.result = hide
-                                val k = "lockscreen hidden ${c.simpleName}.${m.name}"
-                                if (iconLog.size < 64 && iconLog.add(k)) XposedBridge.log("AOSPIsland: $k (pkg=$pkg); shown in Now Bar only")
-                            } catch (t: Throwable) { XposedBridge.log("AOSPIsland: lockscreen hook error: $t") }
-                        }
-                    })
-                    hooked++
-                } catch (t: Throwable) { XposedBridge.log("AOSPIsland: cannot hook ${c.name}.${m.name}: $t") }
-            }
-        }
-        XposedBridge.log("AOSPIsland: lock-screen notification hide hooks=$hooked" + if (hooked == 0) " (class not found on this ROM - send the SystemUI class list)" else "")
-    }
-
-    private val lockMediaClasses = ConcurrentHashMap<Class<*>, Boolean>()
-    private fun isLockMediaView(v: View): Boolean = lockMediaClasses.getOrPut(v.javaClass) {
-        var k: Class<*>? = v.javaClass
-        var hit = false
-        while (k != null && k != View::class.java) { if (k.name.endsWith(".MediaContainerView")) { hit = true; break }; k = k.superclass }
-        hit
-    }
-    private fun hideLockMedia(): Boolean = runtime?.config?.nowBarHideNativeMedia == true && keyguardLocked()
-
-    /**
-     * Removes SystemUI's own media player from the lock screen so media only shows in the Now Bar.
-     * The lock-screen player lives in a MediaContainerView inside the notification stack; while the keyguard is
-     * locked any attempt to make it visible is turned into GONE (and KeyguardMediaController's containers are
-     * collapsed after every refresh). Unlocked, nothing is touched.
-     */
-    fun hookLockscreenMedia(cl: ClassLoader) {
-        var hooked = 0
-        try {
-            XposedBridge.hookAllMethods(View::class.java, "setVisibility", object : XC_MethodHook() {
-                override fun beforeHookedMethod(p: MethodHookParam) {
-                    try {
-                        if ((p.args[0] as? Int) == View.GONE) return
-                        val v = p.thisObject as? View ?: return
-                        if (!isLockMediaView(v) || !hideLockMedia()) return
-                        p.args[0] = View.GONE
-                    } catch (_: Throwable) { }
-                }
-            })
-            hooked++
-        } catch (t: Throwable) { XposedBridge.log("AOSPIsland: media container hook failed: $t") }
-        val names = listOf(
-            "com.android.systemui.media.controls.ui.controller.KeyguardMediaController",
-            "com.android.systemui.media.controls.ui.KeyguardMediaController",
-            "com.android.systemui.statusbar.notification.stack.KeyguardMediaController"
-        )
-        for (n in names) {
-            val c = XposedHelpers.findClassIfExists(n, cl) ?: continue
-            for (m in c.declaredMethods) {
-                if (!(m.name.startsWith("refreshMediaPosition") || m.name.startsWith("attach") || m.name == "setVisibility")) continue
-                try {
-                    XposedBridge.hookAllMethods(c, m.name, object : XC_MethodHook() {
-                        override fun afterHookedMethod(p: MethodHookParam) {
-                            try {
-                                if (!hideLockMedia()) return
-                                for (f in listOf("singlePaneContainer", "splitShadeContainer")) {
-                                    val fld = findField(p.thisObject.javaClass, f) ?: continue
-                                    (fld.get(p.thisObject) as? View)?.visibility = View.GONE
-                                }
-                            } catch (_: Throwable) { }
-                        }
-                    })
-                    hooked++
-                } catch (t: Throwable) { XposedBridge.log("AOSPIsland: cannot hook ${c.name}.${m.name}: $t") }
-            }
-        }
-        // SystemUI reads Settings.Secure "media_controls_lock_screen" to decide whether the lock screen shows a player
-        // (view- or Compose-based alike): while the option is on, report it as off to SystemUI only.
-        try {
-            XposedBridge.hookAllMethods(android.provider.Settings.Secure::class.java, "getStringForUser", object : XC_MethodHook() {
-                override fun beforeHookedMethod(p: MethodHookParam) {
-                    if (p.args.getOrNull(1) == "media_controls_lock_screen" && runtime?.config?.nowBarHideNativeMedia == true) p.result = "0"
-                }
-            })
-            XposedBridge.hookAllMethods(android.provider.Settings.Secure::class.java, "getIntForUser", object : XC_MethodHook() {
-                override fun beforeHookedMethod(p: MethodHookParam) {
-                    if (p.args.getOrNull(1) == "media_controls_lock_screen" && runtime?.config?.nowBarHideNativeMedia == true) p.result = 0
-                }
-            })
-            XposedBridge.hookAllMethods(android.provider.Settings.Secure::class.java, "getInt", object : XC_MethodHook() {
-                override fun beforeHookedMethod(p: MethodHookParam) {
-                    if (p.args.getOrNull(1) == "media_controls_lock_screen" && runtime?.config?.nowBarHideNativeMedia == true) p.result = 0
-                }
-            })
-            hooked++
-        } catch (t: Throwable) { XposedBridge.log("AOSPIsland: media setting hook failed: $t") }
-        sysCl = cl
-        main.postDelayed({ mediaSweepTick() }, 3000)
-        XposedBridge.log("AOSPIsland: lock-screen media hide hooks=$hooked (+ view sweeper)")
-    }
-
-    // ---- lock-screen media sweeper: finds the media views by class / resource id and hides them while locked ----
-    private var sysCl: ClassLoader? = null
-    private val sweptViews = java.util.WeakHashMap<View, Int>()
-    private val mediaSeen = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
-    private var mediaDumped = false
-    private var lastMediaReport = 0L
-
-    private fun mediaIdName(v: View): String? = try { if (v.id != View.NO_ID) v.resources.getResourceEntryName(v.id) else null } catch (_: Throwable) { null }
-
-    private fun isLockMediaCandidate(v: View, id: String?): Boolean {
-        val cn = v.javaClass.name
-        if (cn.endsWith(".MediaContainerView")) return true
-        val i = id?.lowercase() ?: return false
-        return i.contains("keyguard_media") || i.contains("lockscreen_media") || i.contains("media_carousel") ||
-            i == "media_container" || i == "media_host" || i.contains("media_player") || i.contains("media_viewer") || i.contains("media_controls")
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    private fun allRootViews(): List<View> = try {
-        val g = Class.forName("android.view.WindowManagerGlobal").getMethod("getInstance").invoke(null)
-        val f = g!!.javaClass.getDeclaredField("mViews"); f.isAccessible = true
-        synchronized(g) { ArrayList(f.get(g) as List<View>) }
-    } catch (_: Throwable) { emptyList() }
-
-    private fun sweep(v: View, depth: Int, hide: Boolean) {
-        if (depth > 40) return
-        val id = mediaIdName(v)
-        val cn = v.javaClass.name
-        if (!mediaDumped || mediaSeen.size < 40) {
-            if (cn.contains("Media", true) || (id != null && id.contains("media", true))) mediaSeen.add("${cn.substringAfterLast('.')}#${id ?: "-"}/vis=${v.visibility}")
-        }
-        if (isLockMediaCandidate(v, id)) {
-            if (hide) {
-                if (v.visibility != View.GONE) {
-                    synchronized(sweptViews) { if (!sweptViews.containsKey(v)) sweptViews[v] = v.visibility }
-                    v.visibility = View.GONE
-                }
-            }
-            return
-        }
-        if (v is android.view.ViewGroup) for (k in 0 until v.childCount) sweep(v.getChildAt(k), depth + 1, hide)
-    }
-
-    private fun restoreSwept() {
-        val m = synchronized(sweptViews) { val c = HashMap(sweptViews); sweptViews.clear(); c }
-        for ((v, vis) in m) try { v.visibility = vis } catch (_: Throwable) { }
-    }
-
-    private var sweepIdle = 0
-
-    private fun mediaSweepTick() {
-        var next = 2000L
-        try {
-            val app = appRef
-            if (app != null && runtime != null) {
-                val hide = runtime?.config?.nowBarHideNativeMedia == true
-                val locked = keyguardLockedFast()
-                val on = (app.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager).isInteractive
-                if (hide && locked && on) {
-                    val before = synchronized(sweptViews) { sweptViews.size }
-                    for (r in allRootViews()) sweep(r, 0, true)
-                    sweepIdle = if (sweptViews.size > before) 0 else (sweepIdle + 1).coerceAtMost(2)
-                    next = 400L shl sweepIdle
-                    val now = android.os.SystemClock.uptimeMillis()
-                    if (mediaSeen.isNotEmpty() && now - lastMediaReport > 6000L) {
-                        lastMediaReport = now
-                        report(app, "lockscreen media views: " + synchronized(mediaSeen) { mediaSeen.joinToString(" | ") }.take(700))
-                    }
-                    if (!mediaDumped) { mediaDumped = true; report(app, "media classes: " + dumpMediaClasses()) }
-                } else if (swept()) restoreSwept()
-            }
-        } catch (t: Throwable) { XposedBridge.log("AOSPIsland: media sweep error: $t") }
-        main.postDelayed({ mediaSweepTick() }, next)
-    }
-    private fun swept() = synchronized(sweptViews) { sweptViews.isNotEmpty() }
-
-    /** Class names in SystemUI that look media + lockscreen related (shown in the app's status box to target a ROM-specific hook). */
-    @Suppress("DEPRECATION")
-    private fun dumpMediaClasses(): String = try {
-        val cl = sysCl ?: return "no classloader"
-        val bdc = Class.forName("dalvik.system.BaseDexClassLoader")
-        val plf = bdc.getDeclaredField("pathList"); plf.isAccessible = true
-        val pl = plf.get(cl)
-        val ef = pl.javaClass.getDeclaredField("dexElements"); ef.isAccessible = true
-        val out = LinkedHashSet<String>()
-        for (el in ef.get(pl) as Array<*>) {
-            val df = el!!.javaClass.getDeclaredField("dexFile").also { it.isAccessible = true }.get(el) as? dalvik.system.DexFile ?: continue
-            val e = df.entries()
-            while (e.hasMoreElements() && out.size < 30) {
-                val n = e.nextElement()
-                if (n.contains("Media") && (n.contains("Keyguard") || n.contains("Lockscreen") || n.contains("Carousel")) && !n.contains('$')) out.add(n.removePrefix("com.android.systemui."))
-            }
-        }
-        out.joinToString(" | ").take(900)
-    } catch (t: Throwable) { "dump failed: $t" }
-
-    private fun keyguardLocked(): Boolean = try {
-        (appRef?.getSystemService(android.content.Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager)?.isKeyguardLocked == true
-    } catch (_: Throwable) { false }
-
     /**
      * Android 16/17 take the heads-up decision in VisualInterruptionDecisionProviderImpl.makeAndLogHeadsUpDecision /
      * makeUnloggedHeadsUpDecision(NotificationEntry): DecisionImpl(String reason, boolean shouldInterrupt). Returning a
@@ -553,8 +325,6 @@ object SystemUiIsland {
         // explicitly enables native-record-chip hiding and AOSPIsland is active, suppress
         // SystemUI's native ongoing-chip row from the beginning of the Start/countdown flow.
         if (hideRecChip) return true
-        // lock screen: the recording lives in the Now Bar, so the native record chip goes while locked
-        if (runtime?.config?.nowBarHideNative == true && runtime?.config?.showRecord == true && runtime?.notifications?.hasRecord == true && keyguardLocked()) return true
         if (!hideCallChip) return false
         val n = runtime?.notifications ?: return false
         return n.hasCall
@@ -828,153 +598,6 @@ object SystemUiIsland {
     }
 
 
-    // ---- lock-screen notification icons (the black circle with an app / download icon under the clock) ----------
-    private val lockIconRoots: MutableSet<View> = java.util.Collections.synchronizedSet(java.util.Collections.newSetFromMap(java.util.WeakHashMap<View, Boolean>()))
-    private val lockHiddenViews = java.util.WeakHashMap<View, Int>()
-    @Volatile private var lockTicker = false
-
-    /** While the keyguard is locked every app notification icon (and its round wrapper) is hidden; the Now Bar carries them. */
-    @Volatile private var lkAt = 0L
-    @Volatile private var lkVal = false
-    private fun keyguardLockedFast(): Boolean { val n = android.os.SystemClock.uptimeMillis(); if (n - lkAt > 150L) { lkVal = keyguardLocked(); lkAt = n }; return lkVal }
-
-    private fun lockIconHidden(v: View): Boolean {
-        if (!iconClassCache.getOrPut(v.javaClass) { v.javaClass.name.endsWith("StatusBarIconView") }) return false
-        if (runtime?.config?.nowBarHideNative != true || !keyguardLockedFast()) return false
-        if (!iconClassCache.getOrPut(v.javaClass) { v.javaClass.name.endsWith("StatusBarIconView") }) return false
-        val sbn = sbnOf(v) ?: return false
-        return lockHideable(sbn)
-    }
-
-    private fun lockHideable(sbn: StatusBarNotification): Boolean {
-        val pkg = sbn.packageName
-        if (pkg == "com.faroquetech.aospisland" || pkg == "com.android.systemui" || pkg.startsWith("com.android.systemui.")) return false
-        if (pkg.contains("incall", ignoreCase = true) || pkg.contains("dialer", ignoreCase = true)) return false
-        if (try { NowBarView.isMediaNotification(sbn) } catch (_: Throwable) { false }) return false
-        return true
-    }
-
-    private val rowClassCache = ConcurrentHashMap<Class<*>, Boolean>()
-    private fun isNotifRow(v: View): Boolean = rowClassCache.getOrPut(v.javaClass) {
-        var k: Class<*>? = v.javaClass; var hit = false
-        while (k != null && k != View::class.java) { if (k.name.endsWith("ExpandableNotificationRow")) { hit = true; break }; k = k.superclass }
-        hit
-    }
-
-    /** The lock screen's own notification card (ExpandableNotificationRow): hidden while locked, the Now Bar carries it. */
-    private fun lockRowHidden(v: View): Boolean {
-        if (!isNotifRow(v)) return false
-        if (runtime?.config?.nowBarHideNative != true || !keyguardLockedFast()) return false
-        val sbn = findSbn(v, 0) ?: return false
-        return lockHideable(sbn)
-    }
-
-    private fun hideLockRow(v: View) {
-        synchronized(lockHiddenViews) { if (lockHiddenViews[v] == null) lockHiddenViews[v] = v.visibility }
-        if (v.visibility != View.GONE) setVis(v, View.GONE)
-    }
-
-    private fun hideLockIcon(v: View) {
-        synchronized(lockHiddenViews) { if (lockHiddenViews[v] == null) lockHiddenViews[v] = v.visibility }
-        if (v.visibility != View.GONE) setVis(v, View.GONE)
-        // the round black wrapper: hide ancestors that only exist to hold this icon
-        val maxPx = ((appRef?.resources?.displayMetrics?.density ?: 3f) * 110f).toInt()
-        var q = v.parent as? android.view.ViewGroup; var n = 0
-        while (q != null && n < 3) {
-            val name = idNameOf(q)
-            if (name.contains("status_bar") || name.contains("start_side") || name.contains("clock") || name.contains("system_icons") ||
-                name.contains("notification_icon_area") || name.contains("shade") || q.width > maxPx || q.height > maxPx) break
-            var other = false
-            for (i in 0 until q.childCount) { val c = q.getChildAt(i); if (c.visibility == View.VISIBLE && !lockHiddenViews.containsKey(c) && c !== v && !isLockIconChild(c)) { other = true; break } }
-            if (other) break
-            synchronized(lockHiddenViews) { if (lockHiddenViews[q] == null) lockHiddenViews[q] = q.visibility }
-            if (q.visibility != View.GONE) setVis(q, View.GONE)
-            q = q.parent as? android.view.ViewGroup; n++
-        }
-    }
-    private fun isLockIconChild(c: View): Boolean = try { lockIconHidden(c) } catch (_: Throwable) { false }
-
-
-    /** Whole lock-screen notification containers, whatever they contain (rows, compact circles, shelf icons). INVISIBLE keeps the layout intact. */
-    private val genericClassCache = ConcurrentHashMap<Class<*>, Int>()
-    private fun genericKind(v: View): Int = genericClassCache.getOrPut(v.javaClass) {
-        var k: Class<*>? = v.javaClass; var r = 0
-        while (k != null && k != View::class.java) {
-            val n = k.name
-            if (n.endsWith("NotificationIconContainer") || n.endsWith("NotificationShelf")) { r = 1; break }
-            if (n.endsWith("NotificationStackScrollLayout")) { r = 2; break }
-            k = k.superclass
-        }
-        r
-    }
-    private fun lockGenericHidden(v: View): Boolean {
-        val kind = genericKind(v)
-        if (kind == 0) return false
-        val c = runtime?.config ?: return false
-        if (!c.nowBarHideNative || !keyguardLockedFast()) return false
-        // the whole stack also carries SystemUI's native media player: only hide it all when that is hidden as well
-        return kind == 1 || c.nowBarHideNativeMedia
-    }
-    private fun hideLockGeneric(v: View) {
-        synchronized(lockHiddenViews) { if (lockHiddenViews[v] == null) lockHiddenViews[v] = v.visibility }
-        if (v.visibility == View.VISIBLE) setVis(v, View.INVISIBLE)
-    }
-
-
-    /** Draw-level safety net: whatever SystemUI does to visibility / alpha, locked-screen notification views are never painted. */
-    private fun lockDrawSuppressed(v: View): Boolean = try { lockGenericHidden(v) || lockRowHidden(v) || lockIconHidden(v) } catch (_: Throwable) { false }
-
-    private var lockDumped = false
-    /** Once per lock: report which notification-looking views are on screen, so an unhandled element can be identified from the app's status box. */
-    private fun dumpLockViews() {
-        if (!keyguardLockedFast()) { lockDumped = false; return }
-        if (lockDumped) return
-        lockDumped = true
-        main.postDelayed({
-            val a = appRef ?: return@postDelayed
-            val seen = HashSet<String>(); var n = 0
-            fun walk(v: View, depth: Int) {
-                if (n >= 6 || depth > 32) return
-                val cn = v.javaClass.name.substringAfterLast('.')
-                if ((cn.contains("otification") || cn.contains("Shelf") || cn.contains("Chip")) && v.visibility == View.VISIBLE && v.width > 0 && seen.add(cn)) {
-                    val loc = IntArray(2); try { v.getLocationOnScreen(loc) } catch (_: Throwable) { }
-                    report(a, "LK $cn #${idNameOf(v)} ${v.width}x${v.height}@${loc[0]},${loc[1]}"); n++
-                }
-                if (v is android.view.ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i), depth + 1)
-            }
-            for (r in synchronized(lockIconRoots) { lockIconRoots.toList() }) try { walk(r, 0) } catch (_: Throwable) { }
-            if (n == 0) report(a, "LK no notification views found under ${lockIconRoots.size} roots")
-        }, 2500)
-    }
-
-    private fun syncLockIcons() {
-        val locked = runtime?.config?.nowBarHideNative == true && keyguardLockedFast()
-        if (!locked) {
-            val hidden = synchronized(lockHiddenViews) { lockHiddenViews.entries.map { it.key to it.value }.also { lockHiddenViews.clear() } }
-            for ((v, w) in hidden) try { if (v.visibility != View.VISIBLE && w == View.VISIBLE) setVis(v, View.VISIBLE) } catch (_: Throwable) { }
-            return
-        }
-        val roots = synchronized(lockIconRoots) { lockIconRoots.toList() }
-        fun walk(v: View, depth: Int) {
-            if (depth > 24) return
-            if (lockGenericHidden(v)) { hideLockGeneric(v); return }
-            if (isNotifRow(v)) { if (lockRowHidden(v)) hideLockRow(v); return }
-            if (v.javaClass.name.endsWith("StatusBarIconView")) { if (lockIconHidden(v)) hideLockIcon(v); return }
-            if (v is android.view.ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i), depth + 1)
-        }
-        for (r in roots) try { walk(r, 0) } catch (_: Throwable) { }
-    }
-
-    private fun trackLockIcon(v: View) {
-        if (!iconClassCache.getOrPut(v.javaClass) { v.javaClass.name.endsWith("StatusBarIconView") } && !isNotifRow(v) && genericKind(v) == 0) return
-        try { lockIconRoots.add(v.rootView) } catch (_: Throwable) { }
-        if (!lockTicker) {
-            lockTicker = true
-            val tick = object : Runnable { override fun run() { try { syncLockIcons(); dumpLockViews() } catch (_: Throwable) { }; main.postDelayed(this, 700) } }
-            main.post(tick)
-        }
-    }
-
     private fun syncProgressIcons() {
         val root = barRoot?.get() ?: return
         fun walk(v: View, depth: Int) {
@@ -1104,16 +727,6 @@ object SystemUiIsland {
                     if (internalSet) return
                     val v = p.thisObject as? View ?: return
                     val vis = p.args.firstOrNull() as? Int ?: return
-                    if (lockGenericHidden(v)) {
-                        synchronized(lockHiddenViews) { if (lockHiddenViews[v] == null) lockHiddenViews[v] = vis }
-                        if (vis == View.VISIBLE) p.args[0] = View.INVISIBLE
-                        return
-                    }
-                    if (lockIconHidden(v) || lockRowHidden(v)) {
-                        synchronized(lockHiddenViews) { if (lockHiddenViews[v] == null) lockHiddenViews[v] = vis }
-                        if (vis == View.VISIBLE) p.args[0] = View.GONE
-                        return
-                    }
                     if (btHideOn() && isBluetoothStatusIcon(v)) {
                         btIconViews.add(v); synchronized(btWantedVis) { btWantedVis[v] = vis }
                         if (vis == View.VISIBLE) p.args[0] = View.GONE
@@ -1142,7 +755,6 @@ object SystemUiIsland {
                 override fun beforeHookedMethod(p: MethodHookParam) {
                     try {
                         val v = p.thisObject as? View ?: return
-                        if (lockDrawSuppressed(v)) { p.setResult(null); return }
                         if (btIconViews.contains(v) && btHideOn()) { p.setResult(null); return }
                         if (!shouldHideChips()) return
                         if (underChip(v) || isCallNotifIcon(v) || isProgressNotifIcon(v)) p.setResult(null)
@@ -1154,7 +766,6 @@ object SystemUiIsland {
                 override fun beforeHookedMethod(p: MethodHookParam) {
                     try {
                         val child = p.args.getOrNull(1) as? View ?: return
-                        if (lockDrawSuppressed(child)) { p.setResult(false); return }
                         if (btIconViews.contains(child) && btHideOn()) { p.setResult(false); return }
                         if (!shouldHideChips()) return
                         if (underChip(child) || isProgressNotifIcon(child)) p.setResult(false)
@@ -1165,10 +776,6 @@ object SystemUiIsland {
                 override fun afterHookedMethod(p: MethodHookParam) {
                     val v = p.thisObject as? View ?: return
                     if (v.javaClass.name.endsWith("PhoneStatusBarView") || v.javaClass.name.endsWith("StatusBarRootView")) barRoot = java.lang.ref.WeakReference(v)
-                    trackLockIcon(v)
-                    if (lockGenericHidden(v)) { hideLockGeneric(v); return }
-                    if (lockRowHidden(v)) { hideLockRow(v); return }
-                    if (lockIconHidden(v)) { hideLockIcon(v); return }
                     if (btHideOn() && isBluetoothStatusIcon(v)) {
                         btIconViews.add(v); synchronized(btWantedVis) { if (btWantedVis[v] == null) btWantedVis[v] = v.visibility }
                         if (v.visibility != View.GONE) setVis(v, View.GONE)

@@ -19,8 +19,6 @@ class IslandXposedEntry : IXposedHookLoadPackage {
                 }
             })
             SystemUiIsland.hookNotificationListener(lpparam.classLoader)
-            SystemUiIsland.hookLockscreenNotifications(lpparam.classLoader)
-            SystemUiIsland.hookLockscreenMedia(lpparam.classLoader)
             SystemUiIsland.hookNativeCallChip()
             SystemUiIsland.hookComposeChips(lpparam.classLoader)
             SystemUiIsland.hookScreenRecordingChipViewModel(lpparam.classLoader)

@@ -21,20 +21,20 @@ class IslandRuntime(private val ctx: Context, val window: IslandWindow, listener
     @Volatile var config: IslandConfig = initial; private set
     val controller = IslandController(ctx, window.view)
     private var lastMedia: List<IslandActivity> = emptyList()
-    private val media = MediaSource(ctx, listener, { pkg -> activeNotificationsForNowBar().any { it.packageName == pkg && NowBarView.isMediaNotification(it) } }) { lastMedia = it; controller.set("media", if (config.showMedia) it else emptyList()); window.updateMedia(it.firstOrNull { a -> a.kind == Kind.MEDIA && a.playing } ?: it.firstOrNull { a -> a.kind == Kind.MEDIA }) }
+    private val media = MediaSource(ctx, listener, { pkg -> activeNotifications().any { it.packageName == pkg && isMediaNotification(it) } }) { lastMedia = it; controller.set("media", if (config.showMedia) it else emptyList()) }
     private val events = SystemEventsSource(ctx, controller) { config }
     val notifications = NotificationSource(ctx, { config }) { controller.set("notif", it) }
     private var running = false
 
     init {
-        window.rawNotifications = { activeNotificationsForNowBar() }; window.onFeed = { media.refresh() }; controller.onLive = { window.updateLive(it) }
+        notifications.onFeedChanged = { media.refresh() }
         // swipe to clear: notification-backed island activities cancel their notification and leave the island right away
         controller.onClear = { a -> if (a.id.startsWith("live:")) { val k = a.id.removePrefix("live:"); IslandHub.cancel(k); notifications.remove(k) } }
     }
 
     /** Read-only copy of every notification the source currently knows (the SystemUI hook only passes "posted since load"). */
     @Suppress("UNCHECKED_CAST")
-    private fun activeNotificationsForNowBar(): List<StatusBarNotification> = try {
+    private fun activeNotifications(): List<StatusBarNotification> = try {
         val f = NotificationSource::class.java.getDeclaredField("active"); f.isAccessible = true
         val m = f.get(notifications) as MutableMap<String, StatusBarNotification>
         synchronized(m) { m.values.toList() }
@@ -44,7 +44,6 @@ class IslandRuntime(private val ctx: Context, val window: IslandWindow, listener
         if (running) return
         running = true
         window.attach(config)
-        window.updateNotifications(IslandHub.snapshot?.toList().orEmpty())
         media.start(); events.start()
     }
 

@@ -609,6 +609,8 @@ class NotificationSource(private val ctx: Context, private val config: () -> Isl
     @Volatile var hasRecord: Boolean = false; private set
     /** Called on the main thread whenever [hasCall] / [hasRecord] changed, so native chips can be re-synced at once. */
     @Volatile var onChipState: (() -> Unit)? = null
+    /** Called on the main thread whenever the notification feed changed (debounced), e.g. so media can be re-checked. */
+    @Volatile var onFeedChanged: (() -> Unit)? = null
 
     fun reset(arr: Array<StatusBarNotification>?) {
         synchronized(active) {
@@ -684,7 +686,10 @@ class NotificationSource(private val ctx: Context, private val config: () -> Isl
         if (max > 0 && !indeterminate && ex.getInt(Notification.EXTRA_PROGRESS, 0) >= max) return false
         return (n.flags and Notification.FLAG_ONGOING_EVENT != 0) || n.category == Notification.CATEGORY_PROGRESS
     }
-    private fun schedule() { handler.removeCallbacks(build); handler.postDelayed(build, 120) }
+    private fun schedule() {
+        handler.removeCallbacks(build); handler.postDelayed(build, 120)
+        try { onFeedChanged?.invoke() } catch (_: Throwable) { }
+    }
 
     private fun rebuild() {
         val cfg = config()

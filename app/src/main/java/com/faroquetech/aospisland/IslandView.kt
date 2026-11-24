@@ -50,12 +50,16 @@ class IslandView(context: Context) : ViewGroup(context) {
 
     var config = IslandConfig()
         set(v) {
-            val oldStyle = field.islandStyle
+            val old = field
             field = v; configureSprings()
             refreshMonet()
             val rp = rawPrimary
-            // switching style re-skins the accents (Material You) and the Adaptive surface, so rebind from the raw activities
-            if (oldStyle != v.islandStyle && rp != null) bind(rp, rawExtras) else applyTargets()
+            // style / visualizer changes re-skin the surface and accents; rebind from the raw activities or rebuild cards
+            val vizChanged = old.showVisualizer != v.showVisualizer || old.realtimeVisualizer != v.realtimeVisualizer || old.visualizerDp != v.visualizerDp
+            if ((old.islandStyle != v.islandStyle || vizChanged)) {
+                if (vizChanged) { card?.let { endInput(); removeView(it) }; card = null; cardFamily = -2 }
+                if (rp != null) bind(rp, rawExtras) else applyTargets()
+            } else applyTargets()
             retintSurface(false)
             invalidate()
         }
@@ -232,6 +236,11 @@ class IslandView(context: Context) : ViewGroup(context) {
         }
         if (style != 1 && style != 2) {
             paint.alpha = (255 * al).toInt(); c.drawRoundRect(l, t, r, b, rad, rad, paint); paint.alpha = 255
+            if (config.amoledBorder && min(w, h) >= dp(12)) {
+                val sw = dpf(1.2f)
+                gEdge.strokeWidth = sw; gEdge.color = Color.argb((0x66 * al).toInt(), 255, 255, 255)
+                c.drawRoundRect(l + sw / 2f, t + sw / 2f, r - sw / 2f, b - sw / 2f, max(0f, rad - sw / 2f), max(0f, rad - sw / 2f), gEdge)
+            }
             return
         }
         val tint = config.glassTintPct.coerceIn(10, 100) / 100f
@@ -350,7 +359,10 @@ class IslandView(context: Context) : ViewGroup(context) {
         card?.let { endInput(); removeView(it) }
         card = null; cardFamily = fam
         val act: (ActivityAction) -> Unit = { a -> onAction?.invoke(a) }
-        card = when (fam) { 0 -> MediaCard(context, act); 1 -> CallCard(context, act); 2 -> LiveCard(context, act); else -> null }
+        card = when (fam) {
+            0 -> MediaCard(context, act, showViz = config.showVisualizer, vizDp = config.visualizerDp.coerceIn(10, 48), realtime = config.realtimeVisualizer)
+            1 -> CallCard(context, act); 2 -> LiveCard(context, act); else -> null
+        }
         card?.let { c -> c.onInput = { on -> inputMode = on; onInputMode?.invoke(on) }; addView(c, 0) }
     }
 
@@ -365,7 +377,8 @@ class IslandView(context: Context) : ViewGroup(context) {
         // trailing
         val now = SystemClock.elapsedRealtime()
         trailW = when {
-            p.kind == Kind.MEDIA -> { trail.setWave(p.accent, p.playing); dp(22) }
+            p.kind == Kind.MEDIA && config.showVisualizer -> { trail.setWave(p.accent, p.playing, config.realtimeVisualizer, (config.visualizerDp.coerceIn(10, 48)) / 22f); dp(config.visualizerDp.coerceIn(10, 48)) }
+            p.kind == Kind.MEDIA -> { trail.setNone(); dp(4) }
             p.kind == Kind.CALL && p.ringing -> { trail.setWave(p.accent, true); dp(22) }
             p.hasChrono -> { val t = chronoText(p, now); trail.setText(t, legible(p.accent)); ceilW(max(trail.textWidth(t), trail.textWidth("00:00"))) }
             p.indeterminateProgress -> { trail.setRing(0f, p.accent, true); dp(22) }

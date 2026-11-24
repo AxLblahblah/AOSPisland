@@ -40,7 +40,7 @@ abstract class Card(ctx: Context, protected val onAction: (ActivityAction) -> Un
         if (a.chronoCountDown) Fmt.time(max(0L, a.chronoBase - now)) else Fmt.time(max(0L, now - a.chronoBase))
 }
 
-class MediaCard(ctx: Context, onAction: (ActivityAction) -> Unit) : Card(ctx, onAction) {
+class MediaCard(ctx: Context, onAction: (ActivityAction) -> Unit, private var showViz: Boolean = true, private var vizDp: Int = 26, private var realtime: Boolean = false) : Card(ctx, onAction) {
     private val art = LeadView(ctx)
     private val title = text(17f, Color.WHITE, bold = true)
     private val artist = text(14f, 0xFFB0B0B8.toInt())
@@ -59,7 +59,8 @@ class MediaCard(ctx: Context, onAction: (ActivityAction) -> Unit) : Card(ctx, on
         val col = LinearLayout(ctx).apply { orientation = VERTICAL; setPadding(dp(14), 0, dp(10), 0) }
         col.addView(title); col.addView(artist, LayoutParams(-1, -2).apply { topMargin = dp(3) })
         top.addView(col, LayoutParams(0, -2, 1f))
-        top.addView(wave, LayoutParams(dp(26), dp(22)))
+        top.addView(wave, LayoutParams(dp(vizDp.coerceIn(10, 48)), dp((vizDp.coerceIn(10, 48) * 0.84f).toInt().coerceAtLeast(12))))
+        wave.visibility = if (showViz) VISIBLE else GONE
         addView(top, LayoutParams(-1, -2))
         addView(seek, LayoutParams(-1, dp(16)).apply { topMargin = dp(14) })
         val times = LinearLayout(ctx).apply { orientation = HORIZONTAL }
@@ -76,7 +77,7 @@ class MediaCard(ctx: Context, onAction: (ActivityAction) -> Unit) : Card(ctx, on
         title.text = a.title.ifBlank { "Now playing" }
         artist.text = a.subtitle
         if (a.art != null) art.setBitmap(a.art) else if (a.icon != null) art.setDrawable(a.icon) else art.setGlyph(Glyph.PLAY, a.accent)
-        wave.setWave(a.accent, a.playing)
+        if (showViz) wave.setWave(a.accent, a.playing, realtime, vizDp / 22f)
         seek.color = a.accent
         play.set(if (a.playing) Glyph.PAUSE else Glyph.PLAY, Color.WHITE)
         bindBtn(prev, actionOf(a, ActionKind.PREV)); bindBtn(play, actionOf(a, ActionKind.PLAYPAUSE)); bindBtn(next, actionOf(a, ActionKind.NEXT))

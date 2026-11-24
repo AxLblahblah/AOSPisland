@@ -55,24 +55,6 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume(); IslandHub.runtime?.restartMedia()
-        if (prefs.getBoolean("systemMode", false) && prefs.getBoolean("nowBarHideNativeMedia", true)) applyNativeMediaSetting(true, false)
-    }
-
-    /**
-     * The lock-screen media player obeys Android's own "show media on lock screen" setting (Settings.Secure
-     * media_controls_lock_screen), which SystemUI watches live. Turning it off removes the native player whatever
-     * UI toolkit draws it. Written directly if we hold WRITE_SECURE_SETTINGS, otherwise through root.
-     */
-    private fun applyNativeMediaSetting(hide: Boolean, toast: Boolean) {
-        val v = if (hide) 0 else 1
-        Thread {
-            val cur = try { Settings.Secure.getInt(contentResolver, "media_controls_lock_screen", 1) } catch (_: Throwable) { 1 }
-            if (cur != v) {
-                val direct = try { Settings.Secure.putInt(contentResolver, "media_controls_lock_screen", v) } catch (_: Throwable) { false }
-                val ok = direct || runSu("settings put secure media_controls_lock_screen $v")
-                if (toast && !ok) runOnUiThread { Toast.makeText(this, "Could not change the setting. Run: su -c settings put secure media_controls_lock_screen $v", Toast.LENGTH_LONG).show() }
-            }
-        }.start()
     }
 
     // ------------------------------------------------------------------------------------------ UI
@@ -97,7 +79,8 @@ class MainActivity : Activity() {
         previewController = IslandController(this, preview)
         val sw = resources.displayMetrics.widthPixels
         preview.config = IslandConfig(enabled = true, islandStyle = prefs.getInt("islandStyle", 0), glassTintPct = prefs.getInt("glassTintPct", 55), blur = prefs.getBoolean("blur", true), haptics = prefs.getBoolean("haptics", true), animSpeed = prefs.getFloat("animSpeed", 1f),
-            widthTrimDp = prefs.getInt("widthTrimDp", 0), cardWidthDp = prefs.getInt("cardWidthDp", 330), tapExpands = prefs.getBoolean("tapExpands", true), maxActivities = prefs.getInt("maxActivities", 3))
+            widthTrimDp = prefs.getInt("widthTrimDp", 0), cardWidthDp = prefs.getInt("cardWidthDp", 330), tapExpands = prefs.getBoolean("tapExpands", true), maxActivities = prefs.getInt("maxActivities", 3),
+            xOffsetDp = prefs.getInt("xOffsetDp", 0), amoledBorder = prefs.getBoolean("amoledBorder", false), showVisualizer = prefs.getBoolean("showVisualizer", true), realtimeVisualizer = prefs.getBoolean("realtimeVisualizer", false), visualizerDp = prefs.getInt("visualizerDp", 22))
         preview.setGeometry(dp(30), dp(36), sw)
         box.addView(preview, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(210)).apply { topMargin = dp(12) })
         root.addView(box, LinearLayout.LayoutParams(-1, dp(240)))
@@ -125,19 +108,18 @@ class MainActivity : Activity() {
         root.addView(section("STYLE"))
         root.addView(styleRow())
         root.addView(sliderRow("Glass opacity (Liquid / Frost only)", "glassTintPct", 10, 100, 55, "%"))
+        root.addView(switchRow("AMOLED border", "amoledBorder", false))
+
+        root.addView(section("VISUALIZER"))
+        root.addView(switchRow("Music visualizer (animated bars next to media)", "showVisualizer", true))
+        root.addView(switchRow("Real-time visualizer (moves with the actual audio)", "realtimeVisualizer", false) { if (it) requestMic() })
+        root.addView(sliderRow("Visualizer size", "visualizerDp", 10, 48, 22, "dp"))
 
         root.addView(section("FEEL"))
         root.addView(sliderRow("Animation speed", "animSpeed", 50, 200, 100, "%", float = true))
         root.addView(switchRow("Blur transitions (Android 12+)", "blur", true)); root.addView(switchRow("Haptic feedback", "haptics", true)); root.addView(switchRow("Tap expands the island (instead of opening the app)", "tapExpands", true))
         root.addView(switchRow("Hide in landscape", "hideInLandscape", true)); root.addView(switchRow("Hide in fullscreen apps (experimental)", "hideInFullscreen", false))
         root.addView(switchRow("Start on boot (overlay mode)", "startOnBoot", true))
-
-        root.addView(section("LOCK SCREEN NOW BAR"))
-        root.addView(label("The Now Bar is a pill in the lock-screen shortcut row: media controls while music plays, and every notification is shown in it. Preview it on a full-screen lock screen and adjust its vertical position.", 13f, muted).apply { setPadding(0, dp(4), 0, dp(8)) })
-        root.addView(button("Open full-screen Now Bar preview") { openNowBarPreview() })
-        root.addView(sliderRow("Now Bar vertical position", "nowBarPositionPct", 0, 100, 94, "%"))
-        root.addView(switchRow("Hide Android's own lock-screen notifications (they only show in the Now Bar; system mode, restart SystemUI after changing)", "nowBarHideNative", true) { hideNativeLockNotifications(it) })
-        root.addView(label("Needs a one-time grant: adb shell pm grant com.faroquetech.aospisland android.permission.WRITE_SECURE_SETTINGS", 12f, muted).apply { setPadding(dp(4), dp(2), dp(4), dp(8)) })
 
         root.addView(section("POSITION"))
         root.addView(sliderRow("Vertical offset", "yOffsetDp", -20, 40, 0, "dp"))
@@ -148,12 +130,6 @@ class MainActivity : Activity() {
         root.addView(switchRow("Manual camera cutout (if auto-detect is wrong)", "manualCutout", false))
         root.addView(sliderRow("Cutout width", "cutoutWdp", 10, 90, 30, "dp")); root.addView(sliderRow("Cutout height", "cutoutHdp", 10, 90, 30, "dp"))
         root.addView(sliderRow("Cutout top distance", "cutoutTopDp", 0, 70, 12, "dp"))
-        root.addView(switchRow("Hide the lock screen's own media player (media only shows in the Now Bar; system mode, restart SystemUI after changing)", "nowBarHideNativeMedia", true) { applyNativeMediaSetting(it, true) })
-        root.addView(button("Now Bar touch layer: ${windowTypeName(prefs.getInt("nowBarWindowType", 2024))} (tap to change; restart SystemUI)") { b ->
-            val order = intArrayOf(2024, 2041, 2040, 2017, 2014); val cur = prefs.getInt("nowBarWindowType", 2024)
-            val next = order[(order.indexOf(cur).coerceAtLeast(0) + 1) % order.size]
-            put("nowBarWindowType", next); (b as Button).text = "Now Bar touch layer: ${windowTypeName(next)} (tap to change; restart SystemUI)"
-        })
         root.addView(button("System-mode window layer: ${windowTypeName(prefs.getInt("windowType", 2014))} (tap to change)") { b ->
             val order = intArrayOf(2014, 2017, 2040, 2041, 2024); val cur = prefs.getInt("windowType", 2014)
             val next = order[(order.indexOf(cur).coerceAtLeast(0) + 1) % order.size]
@@ -242,71 +218,21 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Turns Android's own lock-screen notification list off/on, so the Now Bar is the only place they appear. */
-    private fun hideNativeLockNotifications(hide: Boolean) {
-        // Best effort only (needs WRITE_SECURE_SETTINGS). The real work is done by the SystemUI hook, which needs no permission.
-        try { Settings.Secure.putInt(contentResolver, "lock_screen_show_notifications", if (hide) 0 else 1) } catch (_: Throwable) { }
-    }
-
-    private fun openNowBarPreview() {
-        val dialog = android.app.Dialog(this, android.R.style.Theme_Material_NoActionBar_Fullscreen)
-        val frame = FrameLayout(this).apply { setBackgroundColor(0xFF42464B.toInt()) }
-        val clock = TextView(this).apply {
-            text = "12:47\nThu, Oct 22"; setTextColor(Color.WHITE); textSize = 42f
-            gravity = Gravity.CENTER; setShadowLayer(dp(3).toFloat(), 0f, dp(2).toFloat(), Color.BLACK)
-        }
-        frame.addView(clock, FrameLayout.LayoutParams(-1, dp(190), Gravity.TOP))
-        val fingerprint = TextView(this).apply {
-            text = "◎\nFingerprint"; setTextColor(0xFFE7ECF4.toInt()); textSize = 20f; gravity = Gravity.CENTER
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x334F91E8); setStroke(dp(2), 0xFFB9D9FF.toInt()) }
-        }
-        val fpSize = dp(92)
-        frame.addView(fingerprint, FrameLayout.LayoutParams(fpSize, fpSize, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(95) })
-        val card = NowBarView(this); card.showDemo()
-        val pct = prefs.getInt("nowBarPositionPct", 94).coerceIn(0,100)
-        // Same height and same screen-height basis as the real lock-screen window (IslandWindow.nowBarY).
-        val cardH = card.contentHeightPx
-        @Suppress("DEPRECATION")
-        val screenH = android.graphics.Point().also { windowManager.defaultDisplay.getRealSize(it) }.y
-        val cardLp = FrameLayout.LayoutParams(NowBarView.widthFor(resources.displayMetrics.density, resources.displayMetrics.widthPixels), cardH, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = ((screenH-cardH).coerceAtLeast(0)*pct/100f).toInt() }
-        val bottom = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20),dp(12),dp(20),dp(16)); background = rounded(0xEE11151C.toInt(),20) }
-        bottom.addView(label("NOW BAR POSITION", 12f, mint, true))
-        val value = label("$pct%", 14f, Color.WHITE, true)
-        bottom.addView(value)
-        bottom.addView(SeekBar(this).apply {
-            max = 100; progress = pct; progressTintList = ColorStateList.valueOf(mint); thumbTintList = ColorStateList.valueOf(Color.WHITE)
-            setOnSeekBarChangeListener(object: SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                    value.text = "$progress%"
-                    cardLp.topMargin = ((screenH-cardH).coerceAtLeast(0)*progress/100f).toInt()
-                    card.layoutParams = cardLp
-                    if (fromUser) put("nowBarPositionPct", progress)
-                }
-                override fun onStartTrackingTouch(sb: SeekBar?) {}
-                override fun onStopTrackingTouch(sb: SeekBar?) {}
-            })
-        })
-        bottom.addView(button("Done") { dialog.dismiss() })
-        frame.addView(bottom, FrameLayout.LayoutParams(-1,-2,Gravity.CENTER_VERTICAL))
-        frame.addView(card, cardLp)   // drawn last so the pill stays visible above the control panel
-        dialog.setContentView(frame)
-        // Span the real display (incl. nav-bar area) like the lock-screen window does, so percentages line up.
-        dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
-        dialog.show()
-    }
-
     private fun windowTypeName(t: Int) = when (t) { 2017 -> "status bar sub-panel"; 2040 -> "notification shade"; 2041 -> "status bar additional"; 2024 -> "navigation bar panel"; else -> "status bar panel" }
+
+    /** RECORD_AUDIO is needed for the real-time visualizer (output-mix capture). */
+    private fun requestMic() {
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) return
+        requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 7001)
+    }
 
     // ------------------------------------------------------------------------------------------ settings plumbing
 
     private fun put(key: String, v: Any) {
         prefs.edit().apply { when (v) { is Boolean -> putBoolean(key, v); is Int -> putInt(key, v); is Float -> putFloat(key, v) } }.apply()
-        if (key == "nowBarPositionPct" && v is Int) {
-            sendBroadcast(Intent(IslandWindow.ACTION_NOWBAR_POSITION).putExtra(IslandWindow.EXTRA_NOWBAR_POSITION, v.coerceIn(0, 100)))
-        }
         contentResolver.notifyChange(Uri.parse("content://${IslandConfig.AUTHORITY}/config"), null)   // wakes the SystemUI module
         val cfg = IslandConfig.load(this)
-        preview.config = IslandConfig(enabled = true, islandStyle = cfg.islandStyle, glassTintPct = cfg.glassTintPct, blur = cfg.blur, haptics = cfg.haptics, animSpeed = cfg.animSpeed, widthTrimDp = cfg.widthTrimDp, cardWidthDp = cfg.cardWidthDp, tapExpands = cfg.tapExpands)
+        preview.config = IslandConfig(enabled = true, islandStyle = cfg.islandStyle, glassTintPct = cfg.glassTintPct, blur = cfg.blur, haptics = cfg.haptics, animSpeed = cfg.animSpeed, widthTrimDp = cfg.widthTrimDp, cardWidthDp = cfg.cardWidthDp, tapExpands = cfg.tapExpands, xOffsetDp = cfg.xOffsetDp, amoledBorder = cfg.amoledBorder, showVisualizer = cfg.showVisualizer, realtimeVisualizer = cfg.realtimeVisualizer, visualizerDp = cfg.visualizerDp)
         preview.setGeometry(dp(30), dp(36), resources.displayMetrics.widthPixels)
     }
 

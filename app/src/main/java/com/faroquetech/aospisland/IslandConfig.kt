@@ -18,6 +18,14 @@ data class IslandConfig(
     val yOffsetDp: Int = 0,
     /** Island horizontal offset from the cutout, in dp (negative = left). The expanded card stays centered on the cutout. */
     val xOffsetDp: Int = 0,
+    /** Hairline border around the island surface in the AMOLED style. */
+    val amoledBorder: Boolean = false,
+    /** Animated waveform bars next to media (pill + media card). */
+    val showVisualizer: Boolean = true,
+    /** Drive the waveform bars with the device's audio output (real-time); falls back to animated bars when unavailable. */
+    val realtimeVisualizer: Boolean = false,
+    /** Width of the media visualizer in dp (also scales its bar amplitude in the compact pill). */
+    val visualizerDp: Int = 22,
     val widthTrimDp: Int = 0,
     val heightTrimDp: Int = 0,
     /** Width of the expanded card. */
@@ -55,16 +63,8 @@ data class IslandConfig(
     val hideInLandscape: Boolean = true,
     val hideInFullscreen: Boolean = false,
     val startOnBoot: Boolean = true,
-    /** Lock-screen Now Bar vertical position, 0 (top) .. 100 (bottom) % of the free screen height. */
-    val nowBarPositionPct: Int = 94,
-    /** System mode: notifications are removed from the real lock screen and only appear in the Now Bar. */
-    val nowBarHideNative: Boolean = true,
-    /** System mode: the lock screen's own media player is removed, media only shows in the Now Bar. */
-    val nowBarHideNativeMedia: Boolean = true,
     /** Window type used in SystemUI mode: 2014 status bar panel, 2041 status bar additional, 2024 nav bar panel. */
     val windowType: Int = 2014,
-    /** Window layer of the lock-screen Now Bar. 2024 (navigation bar panel) sits above the keyguard/shade window so it gets touches. */
-    val nowBarWindowType: Int = 2024,
     /** Packages allowed to show progress-only live activities (chronometers/navigation are always allowed). */
     val liveApps: Set<String> = emptySet(),
     /** Activities visible at once: the main pill plus (n - 1) small bubbles to its left. */
@@ -96,7 +96,10 @@ data class IslandConfig(
                 animSpeed = f("animSpeed", d.animSpeed).coerceIn(0.5f, 2f),
                 blur = b("blur", d.blur), haptics = b("haptics", d.haptics),
                 islandStyle = i("islandStyle", d.islandStyle).coerceIn(0, 4), glassTintPct = i("glassTintPct", d.glassTintPct).coerceIn(10, 100),
-                yOffsetDp = i("yOffsetDp", d.yOffsetDp), xOffsetDp = i("xOffsetDp", d.xOffsetDp).coerceIn(-150, 150), widthTrimDp = i("widthTrimDp", d.widthTrimDp),
+                yOffsetDp = i("yOffsetDp", d.yOffsetDp), xOffsetDp = i("xOffsetDp", d.xOffsetDp).coerceIn(-150, 150),
+                amoledBorder = b("amoledBorder", d.amoledBorder),
+                showVisualizer = b("showVisualizer", d.showVisualizer), realtimeVisualizer = b("realtimeVisualizer", d.realtimeVisualizer),
+                visualizerDp = i("visualizerDp", d.visualizerDp).coerceIn(10, 48), widthTrimDp = i("widthTrimDp", d.widthTrimDp),
                 heightTrimDp = i("heightTrimDp", d.heightTrimDp), cardWidthDp = i("cardWidthDp", d.cardWidthDp), tapExpands = b("tapExpands", d.tapExpands),
                 manualCutout = b("manualCutout", d.manualCutout),
                 cutoutWdp = i("cutoutWdp", d.cutoutWdp), cutoutHdp = i("cutoutHdp", d.cutoutHdp), cutoutTopDp = i("cutoutTopDp", d.cutoutTopDp),
@@ -108,11 +111,7 @@ data class IslandConfig(
                 showCharging = b("showCharging", d.showCharging), showFlashlight = b("showFlashlight", d.showFlashlight), showBluetooth = b("showBluetooth", d.showBluetooth), hideNativeBluetoothIcon = b("hideNativeBluetoothIcon", d.hideNativeBluetoothIcon), showRinger = b("showRinger", d.showRinger),
                 hideInLandscape = b("hideInLandscape", d.hideInLandscape), hideInFullscreen = b("hideInFullscreen", d.hideInFullscreen),
                 startOnBoot = b("startOnBoot", d.startOnBoot),
-                nowBarPositionPct = i("nowBarPositionPct", d.nowBarPositionPct).coerceIn(0, 100),
-                nowBarHideNative = b("nowBarHideNative", d.nowBarHideNative),
-                nowBarHideNativeMedia = b("nowBarHideNativeMedia", d.nowBarHideNativeMedia),
                 windowType = i("windowType", d.windowType),
-                nowBarWindowType = i("nowBarWindowType", d.nowBarWindowType),
                 maxActivities = i("maxActivities", d.maxActivities).coerceIn(2, 5),
                 liveApps = (m["liveApps"] as? Collection<*>)?.filterIsInstance<String>()?.toSet() ?: d.liveApps,
             )

@@ -1,8 +1,10 @@
 package com.faroquetech.aospisland
 
+import android.app.Notification
 import android.app.PendingIntent
 import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
+import android.service.notification.StatusBarNotification
 
 enum class Kind { CALL, LIVE, MEDIA, CHARGING, BLUETOOTH, RINGER, RECORD, HOTSPOT }
 
@@ -53,4 +55,11 @@ data class IslandActivity(
     /** Transient events (charger, bluetooth, ringer) never expand. */
     val expandable: Boolean get() = !transient
     val autoExpand: Boolean get() = kind == Kind.CALL && ringing
+}
+
+/** True for a media-player notification (transport category or a MediaStyle session token). */
+fun isMediaNotification(sbn: StatusBarNotification): Boolean {
+    val n = sbn.notification ?: return false
+    if (n.category == Notification.CATEGORY_TRANSPORT) return true
+    return try { n.extras?.getParcelable<android.media.session.MediaSession.Token>("android.mediaSession") != null } catch (_: Throwable) { false }
 }

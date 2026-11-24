@@ -140,13 +140,18 @@ class TrailView(context: Context) : View(context) {
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); textSize = 13f * resources.displayMetrics.scaledDensity; textAlign = Paint.Align.RIGHT }
     private val phase = floatArrayOf(0f, 1.3f, 2.6f, 0.7f, 1.9f)
     private val speeds = floatArrayOf(7.1f, 9.3f, 6.2f, 8.4f, 7.7f)
+    private val liveLevels = FloatArray(VisualizerEngine.BANDS)
+    /** Drives the WAVE bars from the device's audio output when true ([VisualizerEngine]). */
+    var realtime = false
+    /** Scales the visualizer bar height (visualizer size setting). */
+    var scale = 1f
 
     fun textWidth(t: String): Float = textPaint.measureText(t)
     /** [t] shortened with an ellipsis only when it is wider than [maxPx]. */
     fun fit(t: String, maxPx: Float): String =
         if (textPaint.measureText(t) <= maxPx) t else android.text.TextUtils.ellipsize(t, android.text.TextPaint(textPaint), maxPx, android.text.TextUtils.TruncateAt.END).toString()
     fun setNone() { mode = Mode.NONE; invalidate() }
-    fun setWave(col: Int, isPlaying: Boolean) { mode = Mode.WAVE; color = col; playing = isPlaying; invalidate() }
+    fun setWave(col: Int, isPlaying: Boolean, realtimeOn: Boolean = false, scaleF: Float = 1f) { mode = Mode.WAVE; color = col; playing = isPlaying; realtime = realtimeOn; scale = scaleF; invalidate() }
     fun setText(t: String, col: Int) { mode = Mode.TEXT; text = t; color = col; invalidate() }
     fun setRing(pr: Float, col: Int, isIndeterminate: Boolean = false) { mode = Mode.RING; progress = pr.coerceIn(0f, 1f); color = col; indeterminate = isIndeterminate; invalidate() }
 
@@ -169,13 +174,21 @@ class TrailView(context: Context) : View(context) {
             }
             Mode.WAVE -> {
                 val n = 5; val bw = w / (n * 2f - 1f); val t = SystemClock.uptimeMillis() / 1000f
+                val live = realtime && playing && VisualizerEngine.bands(liveLevels)
                 p.style = Paint.Style.FILL; p.color = color
                 for (i in 0 until n) {
-                    val amp = if (playing) 0.28f + 0.72f * (0.5f + 0.5f * sin(t * speeds[i] + phase[i])) else 0.18f
-                    val bh = max(bw, h * amp); val x = i * bw * 2f
+                    val amp = when {
+                        !playing -> 0.18f
+                        live -> (0.15f + 0.85f * liveLevels[i.coerceAtMost(liveLevels.lastIndex)]) * scale
+                        else -> 0.28f + 0.72f * (0.5f + 0.5f * sin(t * speeds[i] + phase[i]))
+                    }
+                    val bh = max(bw, (h * amp).coerceAtMost(h)); val x = i * bw * 2f
                     rect.set(x, h / 2f - bh / 2f, x + bw, h / 2f + bh / 2f); c.drawRoundRect(rect, bw / 2f, bw / 2f, p)
                 }
-                if (playing && isShown) postInvalidateOnAnimation()
+                if (playing && isShown) {
+                    if (realtime) VisualizerEngine.kick()
+                    postInvalidateOnAnimation()
+                }
             }
         }
     }
